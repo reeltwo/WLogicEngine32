@@ -2190,6 +2190,32 @@ MARCDUINO_ACTION(DirectCommand, ~RT, ({
 
 ////////////////
 
+MARCDUINO_ACTION(WifiByeBye, #WIBYE, ({
+    bool wifiEnabled = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
+    if (wifiEnabled)
+    {
+        preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
+        preferences.end();
+        DEBUG_PRINTLN("Enabling WiFi. Restarting");
+        ESP.restart();
+    }
+}))
+
+////////////////
+
+MARCDUINO_ACTION(WifiHiHi, #WIHI, ({
+    bool wifiEnabled = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
+    if (!wifiEnabled)
+    {
+        preferences.putBool(PREFERENCE_WIFI_ENABLED, true);
+        preferences.end();
+        DEBUG_PRINTLN("Disabling WiFi. Restarting");
+        ESP.restart();
+    }
+}))
+
+////////////////
+
 void loop()
 {
 #ifdef USE_OTA

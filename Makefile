@@ -1,0 +1,12 @@
+TARGET=ESP32
+PORT=/dev/ttyUSB0
+#ESP32_FILESYSTEM=littlefs
+ESP32_PSRAM=enabled
+ESP32_FILESYSTEM=spiffs
+ESP32_FILESYSTEM_PART=spiffs
+ESP32_PARTSCHEME=min_spiffs
+ESP32_FLASHSIZE=4M
+GITHUB_REPOS= \
+reeltwo/Reeltwo
+
+include ../Arduino.mk

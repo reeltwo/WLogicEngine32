@@ -183,6 +183,11 @@ bool RLD_needsClock()
 
 void RLD_init()
 {
+    // LogicEngineCurvedRLD and LogicEngineCurvedRLDInverted will use pins
+    // REAR_LOGIC_PIN and REAR_LOGIC_CLOCK_PIN. Change all other RLD types to use
+    // REAR_LOGIC_CLOCK_PIN instead of the default REAR_LOGIC_PIN.
+    // That way they plug in directly to the board. In that case REAR_LOGIC_PIN
+    // will be left unused.
     switch (sRLDType)
     {
         default:
@@ -195,22 +200,22 @@ void RLD_init()
             RLD = new LogicEngineCurvedRLDInverted<>(LogicEngineRLDDefault, 2);
             break;
         case kLogicEngineDeathStarRLD:
-            RLD = new LogicEngineDeathStarRLD<>(LogicEngineRLDDefault, 2);
+            RLD = new LogicEngineDeathStarRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
         case kLogicEngineDeathStarRLDStaggerOdd:
-            RLD = new LogicEngineDeathStarRLDStaggerOdd<>(LogicEngineRLDDefault, 2);
+            RLD = new LogicEngineDeathStarRLDStaggerOdd<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
         case kLogicEngineDeathStarRLDInverted:
-            RLD = new LogicEngineDeathStarRLDInverted<>(LogicEngineRLDDefault, 2);
+            RLD = new LogicEngineDeathStarRLDInverted<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
         case kLogicEngineDeathStarRLDInvertedStaggerOdd:
-            RLD = new LogicEngineDeathStarRLDInvertedStaggerOdd<>(LogicEngineRLDDefault, 2);
+            RLD = new LogicEngineDeathStarRLDInvertedStaggerOdd<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
         case kLogicEngineKennyRLD:
-            RLD = new LogicEngineKennyRLD<>(LogicEngineRLDDefault, 2);
+            RLD = new LogicEngineKennyRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
         case kLogicEngineNabooRLD:
-            RLD = new LogicEngineNabooRLD<>(LogicEngineRLDDefault, 2);
+            RLD = new LogicEngineNabooRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
     }
 }
@@ -2035,6 +2040,7 @@ void setup()
     if (wifiMarcduinoReceiver.enabled())
     {
         wifiMarcduinoReceiver.setCommandHandler([](const char* cmd) {
+            DEBUG_PRINTLN(cmd);
             Marcduino::processCommand(player, cmd);
             if (preferences.getBool(PREFERENCE_MARCWIFI_SERIAL_PASS, MARC_WIFI_SERIAL_PASS) &&
                 preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED) &&

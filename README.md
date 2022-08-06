@@ -10,7 +10,7 @@ You can find the Astromech parts run for the RSeries LogicEngine here:
 
 https://astromech.net/forums/showthread.php?40649-RSeries-Logic-Engine-dome-lighting-kit-250-(Jan-2021)-Open
 
-Firmware is updateable via an SD card (or OTA through the web interface). For future updates, copy the new LEngine.bin firmware file onto an SD card, insert it and on the next power-up the board will update itself. This makes it much simpler for the average builder to update as you no longer need a full Arduino development environment set up just to compile and upload an update. The firmware will be deleted from the SD card after a successful update.
+Firmware is updatable via an SD card (or OTA through the web interface). For future updates, copy the new LEngine.bin firmware file onto an SD card, insert it and on the next power-up the board will update itself. This makes it much simpler for the average builder to update as you no longer need a full Arduino development environment set up just to compile and upload an update. The firmware will be deleted from the SD card after a successful update.
 
 Logic settings are adjustable using the buttons and trimpot on the board, so a droid can easily be configured with different color palettes, brightness levels and pattern speeds.
 
@@ -208,4 +208,12 @@ Developer Notes: https://github.com/joymonkey/logicengine/wiki/Developer-Notes
 
 Calculate HSV Color Values:  http://rseries.net/logic2/hsv/
 
-Explanation of how "Tween" colors are implimented: http://rseries.net/logic2/color/?keys=4&tweens=4
+Explanation of how "Tween" colors are implemented: http://rseries.net/logic2/color/?keys=4&tweens=4
+
+## Libraries Used
+
+<ul>
+<li>https://github.com/reeltwo/Reeltwo</li>
+<li>https://github.com/FastLED/FastLED</li>
+</ul>
+

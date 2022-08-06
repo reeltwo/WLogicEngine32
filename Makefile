@@ -7,6 +7,7 @@ ESP32_FILESYSTEM_PART=spiffs
 ESP32_PARTSCHEME=min_spiffs
 ESP32_FLASHSIZE=4M
 GITHUB_REPOS= \
-reeltwo/Reeltwo
+reeltwo/Reeltwo \
+FastLED/FastLED
 
 include ../Arduino.mk

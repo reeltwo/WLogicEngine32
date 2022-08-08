@@ -3,17 +3,14 @@
 // CONFIGURATION OPTIONS
 ////////////////////////////////
 
-#define USE_DEBUG
-#define USE_LEDLIB 0
-#define USE_SDCARD
+#define USE_DEBUG                     // Define to enable debug diagnostic
+#define USE_WIFI                      // Define to enable Wifi support
+#define USE_DROID_REMOTE              // Define for droid remote support
+#define USE_SPIFFS                    // Enable read only filesystem
+#define USE_LEDLIB 0                  // Require FastLED instead of Adafruit NeoPixel library
+#define USE_SDCARD                    // Enable SD card support
 
-// Audio support is Work in progress. CTFFT requires a newer version of the compiler, using the newer compiler causes problems with FastLED
-//#define USE_AUDIO
-#define USE_WIFI
-#define USE_SPIFFS
 #define USE_LOGICS
-//#define USE_FATFS
-//#define USE_LITTLEFS
 #ifdef USE_WIFI
 #define USE_MDNS
 #define USE_OTA
@@ -22,7 +19,12 @@
 //#define LIVE_STREAM
 #endif
 
-/* LED preferences */
+////////////////////////////////
+
+#define PREFERENCE_REMOTE_ENABLED       "remote"
+#define PREFERENCE_REMOTE_HOSTNAME      "rhost"
+#define PREFERENCE_REMOTE_SECRET        "remote"
+
 #define PREFERENCE_FLD                  "fld"
 #define PREFERENCE_RLD                  "rld"
 #define PREFERENCE_WIFI_ENABLED         "wifi"
@@ -50,9 +52,28 @@
 
 #include "pin-config.h"
 
+////////////////
+
+// Replace with your network credentials
+#ifdef USE_WIFI
+#define REMOTE_ENABLED       false
+#define WIFI_ENABLED         true
+// Set these to your desired credentials.
+#define WIFI_AP_NAME         "RSeries"
+#define WIFI_AP_PASSPHRASE   "Astromech"
+#define WIFI_ACCESS_POINT    true  /* true if access point: false if joining existing wifi */
+#endif
+
+#define SMQ_HOSTNAME         "RSeries"
+#define SMQ_SECRET           "Astromech"
+
 ////////////////////////////////
 
+#ifdef USE_DROID_REMOTE
+#include "ReelTwoSMQ32.h"
+#else
 #include "ReelTwo.h"
+#endif
 #include "Arduino.h"
 #include "core/AnalogMonitor.h"
 #include "core/DelayCall.h"
@@ -61,16 +82,7 @@
 #include <ArduinoOTA.h>
 #endif
 
-////////////////
-
-// Replace with your network credentials
-#ifdef USE_WIFI
-#define WIFI_ENABLED         true
-// Set these to your desired credentials.
-#define WIFI_AP_NAME         "R2D2"
-#define WIFI_AP_PASSPHRASE   "Astromech"
-#define WIFI_ACCESS_POINT    true  /* true if access point: false if joining existing wifi */
-#endif
+////////////////////////////////
 
 #define MARC_SERIAL1_BAUD_RATE          9600
 #define MARC_SERIAL2_BAUD_RATE          9600
@@ -79,11 +91,16 @@
 #define MARC_WIFI_ENABLED               true
 #define MARC_WIFI_SERIAL_PASS           true
 
+////////////////////////////////
+
+#if defined(USE_LCD_SCREEN) || defined(USE_DROID_REMOTE)
+#define USE_MENUS                     // Define if using menu system
+#endif
+
+////////////////////////////////
+
 #include "wifi/WifiAccess.h"
 
-#ifdef USE_AUDIO
-#include "Audio.h"
-#endif
 #ifdef USE_MDNS
 #include <ESPmDNS.h>
 #endif
@@ -116,20 +133,10 @@
 #include "dome/LogicEngineController.h"
 #include "ServoDispatchPCA9685.h"
 #include "ServoSequencer.h"
-#ifdef USE_AUDIO
-#include "AudioFrequencyBitmap.h"
-#endif
 
 #include <Preferences.h>
 
 Preferences preferences;
-
-/////////////////////////////////////////////////////////////////////////
-
-#ifdef USE_AUDIO
-Audio audio;
-AudioFrequencyBitmap audioBitmap;
-#endif
 
 /////////////////////////////////////////////////////////////////////////
 
@@ -355,19 +362,6 @@ void RLD_setLogicEffectSelector(LogicEffectSelector selector)
 String FLDText;
 String RLDText;
 
-#ifdef USE_AUDIO
-class AudioFrequencyBitmapPeakValueProvider : public PeakValueProvider
-{
-public:
-    virtual byte getPeakValue() override
-    {
-        constexpr float baseline = 0;//0.35f;
-        byte peak = (max(audioBitmap.get(0.25f, 0.0f) / 255.0f - baseline, 0.0f) / (1.0f - baseline)) * 255;// * LogicEngineDefaults::MAX_BRIGHTNESS;
-        return peak;
-    }
-};
-AudioFrequencyBitmapPeakValueProvider audioPeakValue;
-#endif
 #endif
 
 /////////////////////////////////////////////////////////////////////////
@@ -393,939 +387,34 @@ AsyncUDP udp;
 File fxdata;
 #endif
 
-TaskHandle_t audioTask;
+#ifdef USE_WIFI
+bool wifiEnabled;
+bool wifiActive;
+bool remoteEnabled;
+bool remoteActive;
+TaskHandle_t eventTask;
 bool otaInProgress;
+#endif
 
 enum
 {
     SDBITMAP = 100,
-    SPECTRUM,
-    REACTIVE,
     PLASMA,
     METABALLS,
     FRACTAL,
     FADEANDSCROLL
 };
 
-static bool LogicEffectBitmap(LogicEngineRenderer& r)
-{
-    return false;
-    if (r.hasEffectChanged())
-    {
-    #ifdef USE_SD
-    #ifndef LIVE_STREAM
-        fxdata = SD.open("/scene.dat");  // read only
-        if (fxdata)
-        {
-            Serial.println("FILE OPENED");
-        }
-        else
-        {
-            Serial.println("FILE FAILED TO OPEN");
-        }
-    #endif
-    #endif
-        r.setEffectDelay(25);
-        r.calculateAllColors();
-    }
-    if (r.getEffectFlip())
-    {
-    #ifndef LIVE_STREAM
-        if (fxdata.available())
-            fxdata.readBytes((char*)leds, NUM_LEDS*3);
-        else
-            memset(leds, '\0', sizeof(leds));
-    #endif
-    }
-    r.updateDisplay();
-    unsigned h = r.height();
-    unsigned w = r.width();
-    for (unsigned y = 0; y < h; y++)
-    {
-        for (unsigned x = 0; x < w; x++)
-        {
-        #ifndef LIVE_STREAM
-            CRGB src = leds[x+y*w];
-            CRGB dst;
-            dst.r = (uint8_t)((float)src.r * 0.5f);
-            dst.g = (uint8_t)((float)src.g * 0.5f);
-            dst.b = (uint8_t)((float)src.b * 0.5f);
-            if (dst.r != 0 || dst.g != 0 || dst.b != 0)
-                r.setPixelRGB(x, y, dst);
-        #else
-            r.setPixelRGB(x, y, leds[x+y*w]);
-        #endif
-        }
-    }
-        // static int scount; scount++;
-        // Serial.print(leds[0].r, HEX); Serial.print(" ");
-        // Serial.print(leds[0].g, HEX); Serial.print(" ");
-        // Serial.print(leds[0].b, HEX); Serial.println();
-    // }
-    return true;
-}
-
-// float map(float x, float in_min, float in_max, float out_min, float out_max)
-// {
-//     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-// }
-
-static bool LogicEffectSpectrum(LogicEngineRenderer& r)
-{
-    if (r.hasEffectChanged())
-    {
-        r.setEffectDelay(25);
-        r.calculateAllColors();
-    }
-#ifdef USE_AUDIO
-    unsigned h = r.height();
-    unsigned w = r.width();
-    unsigned f = 8;
-    for (unsigned x = 0; x < w; x++, f += 4)
-    {
-        int fval = 0;
-        constexpr float baseline = 0.35f;
-        fval = max(int(audioBitmap.get(f+0, 0)), fval);
-        fval = max(int(audioBitmap.get(f+1, 0)), fval);
-        fval = max(int(audioBitmap.get(f+2, 0)), fval);
-        fval = max(int(audioBitmap.get(f+3, 0)), fval);
-        float freq = max((fval / 255.0f) - baseline, 0.0f) / (1.0f - baseline);
-
-        CRGB pixel;
-        pixel.g = 0;
-        pixel.b = 0;
-
-        constexpr int maxval = LogicEngineDefaults::MAX_BRIGHTNESS;
-        int c = freq * 4*maxval;
-
-        int color1 = min(max(c - 3*maxval, 0), maxval);
-        int color2 = min(max(c - 2*maxval, 0), maxval);
-        int color3 = min(max(c - 1*maxval, 0), maxval);
-        int color4 = min(max(c, 0), maxval);
-
-        if (h == 4)
-        {
-            pixel.r = color1;
-            pixel.g = 0;
-            pixel.b = 0;
-            r.setPixelRGB(x, 0, pixel);
-            pixel.r = color2;
-            pixel.g = color2;
-            pixel.b = 0;
-            r.setPixelRGB(x, 1, pixel);
-            pixel.r = 0;
-            pixel.g = color3;
-            pixel.b = color3;
-            r.setPixelRGB(x, 2, pixel);
-            pixel.r = 0;
-            pixel.g = color4;
-            pixel.b = 0;
-            r.setPixelRGB(x, 3, pixel);
-        }
-        else
-        {
-            pixel.r = color1;
-            pixel.g = 0;
-            pixel.b = 0;
-            r.setPixelRGB(x, 0, pixel);
-            pixel.r = color1;
-            pixel.g = 0;
-            pixel.b = 0;
-            r.setPixelRGB(x, 1, pixel);
-            pixel.r = color1;
-            pixel.g = 0;
-            pixel.b = 0;
-            r.setPixelRGB(x, 2, pixel);
-            pixel.r = color2;
-            pixel.g = color2;
-            pixel.b = 0;
-            r.setPixelRGB(x, 3, pixel);
-            pixel.r = color2;
-            pixel.g = color2;
-            pixel.b = 0;
-            r.setPixelRGB(x, 4, pixel);
-            pixel.r = 0;
-            pixel.g = color3;
-            pixel.b = color3;
-            r.setPixelRGB(x, 5, pixel);
-            pixel.r = 0;
-            pixel.g = color3;
-            pixel.b = color3;
-            r.setPixelRGB(x, 6, pixel);
-            pixel.r = 0;
-            pixel.g = color3;
-            pixel.b = color3;
-            r.setPixelRGB(x, 7, pixel);
-            pixel.r = 0;
-            pixel.g = color4;
-            pixel.b = 0;
-            r.setPixelRGB(x, 8, pixel);
-            pixel.r = 0;
-            pixel.g = color4;
-            pixel.b = 0;
-            r.setPixelRGB(x, 9, pixel);
-        }
-    }
-#endif
-    return true;
-}
-
-static double randomDouble()
-{
-    return (random(10000)/10000.0);
-}
-
-#ifdef USE_AUDIO
-
-static double interpolate(double d1, double d2, double fraction)
-{
-    return d1 + (d2 - d1) * fraction;
-}
-
-static CRGB interpolate(CRGB color1, CRGB color2, double fraction)
-{
-    CRGB color;
-    color.r = int(interpolate(color1.r, color2.r, fraction));
-    color.g = int(interpolate(color1.g, color2.g, fraction));
-    color.b = int(interpolate(color1.b, color2.b, fraction));
-    return color;
-}
-
-static CRGB getBlendedColor(float percentage)
-{
-    CRGB black = { 0, 0, 0 };
-    CRGB yellow = { 0xFF, 0xFF, 0 };
-    CRGB red = { 0xFF, 0xFF, 0 };
-    if (percentage < 0.5f)
-        return interpolate(black, yellow, percentage / 0.5f);
-    return interpolate(yellow, red, (percentage - 0.5f) / 0.5f);
-}
-#endif
-
-static bool LogicEffectReactive(LogicEngineRenderer& r)
-{
-    if (r.hasEffectChanged())
-    {
-        r.setEffectDelay(50);
-        memset(leds, '\0', sizeof(leds));
-    }
-#ifdef USE_AUDIO
-    unsigned h = r.height();
-    unsigned w = r.width();
-    unsigned f = 8;
-    if (r.getEffectFlip() && audioBitmap.isUpdated())
-    {
-        memcpy(leds, &leds[w], w*sizeof(leds[0])*(h-1));
-    }
-    for (unsigned x = 0; x < w; x++, f+= 4)
-    {
-        int fval = 0;
-        constexpr float baseline = 0.50f;
-        fval = max(int(audioBitmap.get(f+0, 0)), fval);
-        fval = max(int(audioBitmap.get(f+1, 0)), fval);
-        fval = max(int(audioBitmap.get(f+2, 0)), fval);
-        fval = max(int(audioBitmap.get(f+3, 0)), fval);
-        float freq = max((fval / 255.0f) - baseline, 0.0f) / (1.0f - baseline);
-
-        // CRGB pixel ;
-        // pixel.r = min(127, int(127 * freq));
-        // pixel.g = min(127, int(2 * 127 * (1-freq)));
-        // pixel.b = 0;
-        leds[x+3*w] = getBlendedColor(freq);
-        // r.setPixelRGB(x, 4, pixel);
-    }
-    for (unsigned y = 0; y < h; y++)
-    {
-        for (unsigned x = 0; x < w; x++)
-        {
-            r.setPixelRGB(x, y, leds[x+y*w]);
-        }
-    }
-#endif
-    return true;
-}
-
-static bool LogicEffectPlasma(LogicEngineRenderer& r)
-{
-    class PlasmaObject : public LogicEffectObject
-    {
-    public:
-        int plasma_step_width = 1;
-        int plasma_cell_size_x = 3;
-        int plasma_cell_size_y = 3;
-        uint8_t plasma_lut[1537][3];
-        float plasma_counter = 0.0F;
-
-        PlasmaObject()
-        {
-            int i;
-            for (i = 0; i < 256; i++)
-            {
-                plasma_lut[i + 0][0] = 255;
-                plasma_lut[i + 0][1] = i;
-                plasma_lut[i + 0][2] = 0;
-            }
-            for (i = 0; i < 256; i++)
-            {
-                plasma_lut[i + 256][0] = 255 - i;
-                plasma_lut[i + 256][1] = 255;
-                plasma_lut[i + 256][2] = 0;
-            }
-            for (i = 0; i < 256; i++)
-            {
-                plasma_lut[i + 512][0] = 0;
-                plasma_lut[i + 512][1] = 255;
-                plasma_lut[i + 512][2] = i;
-            }
-            for (i = 0; i < 256; i++)
-            {
-                plasma_lut[i + 768][0] = 0;
-                plasma_lut[i + 768][1] = 255 - i;
-                plasma_lut[i + 768][2] = 255;
-            }
-            for (i = 0; i < 256; i++)
-            {
-                plasma_lut[i + 1024][0] = i;
-                plasma_lut[i + 1024][1] = 0;
-                plasma_lut[i + 1024][2] = 255;
-            }
-            for (i = 0; i < 256; i++)
-            {
-                plasma_lut[i + 1280][0] = 255;
-                plasma_lut[i + 1280][1] = 0;
-                plasma_lut[i + 1280][2] = 255 - i;
-            }
-        }
-    };
-
-    if (r.hasEffectChanged())
-    {
-        r.setEffectObject(new PlasmaObject());
-        r.clear();
-    }
-    PlasmaObject* obj = (PlasmaObject*)r.getEffectObject();
-    unsigned h = r.height();
-    unsigned w = r.width();
-
-    obj->plasma_counter += obj->plasma_step_width / 10.0;
-    double calc1 = sin((obj->plasma_counter * 0.006));
-    double calc2 = sin((obj->plasma_counter * -0.06));
-    double xc = 25.0;
-    for (int x = 0; x < w; x++)
-    {
-        xc += (obj->plasma_cell_size_x / 10.0);
-        double yc = 25.0;
-        double s1 = 768.0 + 768.0 * sin(xc) * calc1;
-        for (int y = 0; y < h; y++)
-        {
-            yc += (obj->plasma_cell_size_y / 10.0);
-            double s2 = 768.0 + 768.0 * sin(yc) * calc2;
-            double s3 = 768.0 + 768.0 * sin((xc + yc + (obj->plasma_counter / 10.0)) / 2.0);
-            int pixel = (int)((s1 + s2 + s3) / 3.0);
-            r.setPixelRGB(
-                x, y,
-                obj->plasma_lut[pixel][0],
-                obj->plasma_lut[pixel][1],
-                obj->plasma_lut[pixel][2]);
-        }
-    }
-    return true;
-}
-
-static bool LogicEffectMetaBalls(LogicEngineRenderer& r)
-{
-    class MetaBallsObject : public LogicEffectObject
-    {
-    public:
-        int mb_r_start = 255;
-        int mb_g_start = 0;
-        int mb_b_start = 255;
-        int mb_dia = 1+random(24);
-        int mb_number = 1+random(4);
-        int mb_speed = 1+random(4);
-        bool mb_random_color = true;
-        int mb_random_time = 25;
-        int* mb_vx;
-        int* mb_vy;
-        int* mb_px;
-        int* mb_py;
-        int* mb_dx;
-        int* mb_dy;
-        int mb_counter = 0;
-
-        MetaBallsObject(LogicEngineRenderer& r)
-        {
-            unsigned h = r.height();
-            unsigned w = r.width();
-            mb_px = new int[mb_number];
-            mb_py = new int[mb_number];
-            mb_dx = new int[mb_number];
-            mb_dy = new int[mb_number];
-            mb_vx = new int[mb_number * w];
-            mb_vy = new int[mb_number * h];
-            for (int j = 0; j < mb_number; j++)
-            {
-                mb_px[j] = (int)(randomDouble() * w);
-                mb_py[j] = (int)(randomDouble() * h);
-                mb_dx[j] = (randomDouble() < 0.5) ? -1 : 1;
-                mb_dy[j] = (randomDouble() < 0.5) ? -1 : 1;
-            }
-            Serial.println(randomDouble());
-            Serial.println(randomDouble());
-            Serial.println(randomDouble());
-            Serial.println(randomDouble());
-            Serial.println(randomDouble());
-        }
-
-        virtual ~MetaBallsObject() override
-        {
-            delete[] mb_px;
-            delete[] mb_py;
-            delete[] mb_dx;
-            delete[] mb_dy;
-            delete[] mb_vx;
-            delete[] mb_vy;
-        }
-    };
-
-    if (r.hasEffectChanged())
-    {
-        r.setEffectObject(new MetaBallsObject(r));
-    }
-    MetaBallsObject* obj = (MetaBallsObject*)r.getEffectObject();
-    unsigned h = r.height();
-    unsigned w = r.width();
-
-    int mb_number = obj->mb_number;
-    int* mb_vx = obj->mb_vx;
-    int* mb_vy = obj->mb_vy;
-    int* mb_px = obj->mb_px;
-    int* mb_py = obj->mb_py;
-    int* mb_dx = obj->mb_dx;
-    int* mb_dy = obj->mb_dy;
-
-    if (obj->mb_random_color)
-    {
-        if (obj->mb_counter > obj->mb_random_time)
-        {
-            obj->mb_r_start = random(127);
-            obj->mb_g_start = random(127);
-            obj->mb_b_start = random(127);
-            obj->mb_counter = 0;
-        }
-        else
-        {
-            obj->mb_counter++;
-        }
-    }
-    for (int i = 0; i < mb_number; i++)
-    {
-        mb_px[i] = mb_px[i] + obj->mb_speed * mb_dx[i];
-        mb_py[i] = mb_py[i] + obj->mb_speed * mb_dy[i];
-        if (mb_px[i] < 0)
-            mb_dx[i] = 1;
-        else if (mb_px[i] > w)
-            mb_dx[i] = -1;
-
-        if (mb_py[i] < 0)
-            mb_dy[i] = 1;
-        else if (mb_py[i] > h)
-            mb_dy[i] = -1;
-        for (int x = 0; x < w; x++)
-            mb_vx[i*mb_number+x] = (mb_px[i] - x) * (mb_px[i] - x);
-        for (int y = 0; y < h; y++)
-            mb_vy[i*mb_number+y] = (mb_py[i] - y) * (mb_py[i] - y);
-    }
-    for (int x = 0; x < w; x++)
-    {
-        for (int y = 0; y < h; y++)
-        {
-            int R = 0;
-            int G = 0;
-            int B = 0;
-            for (int i = 0; i < mb_number; i++)
-            {
-                double distance = (mb_vx[i*mb_number+x] + mb_vy[i*mb_number+y] + 1);
-                R += (int)(obj->mb_dia / distance * obj->mb_r_start);
-                G += (int)(obj->mb_dia / distance * obj->mb_g_start);
-                B += (int)(obj->mb_dia / distance * obj->mb_b_start);
-            }
-            if (R > 255)
-                R = 255;
-            if (G > 255)
-                G = 255;
-            if (B > 255)
-                B = 255;
-            r.setPixelRGB(x, y, R*0.5, G*0.5, B*0.5);
-        }
-    }
-    return true;
-}
-
-static bool LogicEffectFractal(LogicEngineRenderer& r)
-{
-    class FractalObject : public LogicEffectObject
-    {
-    public:
-        int* color;
-        int* level;
-        int grow_size = 1+random(3);
-        bool distortion = true;
-        int dist_strength = 10+random(30);
-
-        FractalObject(LogicEngineRenderer& r)
-        {
-            unsigned h = r.height();
-            unsigned w = r.width();
-            color = new int[w*h];
-            level = new int[w*h];
-            memset(color, '\0', sizeof(color[0]) * w * h);
-            memset(level, '\0', sizeof(level[0]) * w * h);
-            for (int x = 0; x < w; x++)
-            {
-                color[x + (h / 3 * 1)*w] = 1;
-                color[x + (h / 3 * 2)*w] = 3;
-            }
-            for (int y = 0; y < h; y++)
-            {
-                color[w / 3 * 1 + y*w] = 2;
-                color[w / 3 * 2 + y*w] = 3;
-            }
-        }
-
-        virtual ~FractalObject() override
-        {
-            delete[] color;
-            delete[] level;
-        }
-    };
-
-    if (r.hasEffectChanged())
-    {
-        r.setEffectObject(new FractalObject(r));
-    }
-    FractalObject* obj = (FractalObject*)r.getEffectObject();
-    unsigned h = r.height();
-    unsigned w = r.width();
-
-    for (int x = 0; x < w; x++)
-    {
-        for (int y = 0; y < h; y++)
-        {
-            int pos_x = 0;
-            int pos_y = 0;
-            while (pos_x == 0 && pos_y == 0)
-            {
-                pos_x = random(3);
-                pos_y = random(3);
-            }
-            pos_x = x - 1 + pos_x;
-            pos_y = y - 1 + pos_y;
-            if (pos_x < 0)
-                pos_x = w - 1;
-            if (pos_y < 0)
-                pos_y = h - 1;
-            if (pos_x > w - 1)
-                pos_x = 0;
-            if (pos_y > h - 1)
-                pos_y = 0;
-            if (obj->color[x + y*w] == 0 && obj->color[pos_x + pos_y*w] != 0
-                && obj->level[pos_x + pos_y*w] < obj->grow_size)
-            {
-                obj->color[x + y*w] = obj->color[pos_x + pos_y*w];
-                obj->level[x + y*w] = obj->level[pos_x + pos_y*w] + 1;
-            }
-            else
-            {
-                switch (obj->color[x + y*w])
-                {
-                    case 1:
-                        if (obj->color[pos_x + pos_y*w] == 3)
-                        {
-                            obj->level[x + y*w] = obj->level[x + y*w] - 1;
-                            obj->level[pos_x + pos_y*w] = obj->level[pos_x + pos_y*w] + 1;
-                        }
-                        if (obj->color[pos_x + pos_y*w] == 2)
-                        {
-                            obj->level[x + y*w] = obj->level[x + y*w] + 1;
-                            obj->level[pos_x + pos_y*w] = obj->level[pos_x + pos_y*w] - 1;
-                        }
-                        break;
-                    case 2:
-                        if (obj->color[pos_x + pos_y*w] == 1)
-                        {
-                            obj->level[x + y*w] = obj->level[x + y*w] - 1;
-                            obj->level[pos_x + pos_y*w] = obj->level[pos_x + pos_y*w] + 1;
-                        }
-                        if (obj->color[pos_x + pos_y*w] == 3)
-                        {
-                            obj->level[x + y*w] = obj->level[x + y*w] + 1;
-                            obj->level[pos_x + pos_y*w] = obj->level[pos_x + pos_y*w] - 1;
-                        }
-                        break;
-                    case 3:
-                        if (obj->color[pos_x + pos_y*w] == 2)
-                        {
-                            obj->level[x + y*w] = obj->level[x + y*w] - 1;
-                            obj->level[pos_x + pos_y*w] = obj->level[pos_x + pos_y*w] + 1;
-                        }
-                        if (obj->color[pos_x + pos_y*w] == 1)
-                        {
-                            obj->level[x + y*w] = obj->level[x + y*w] + 1;
-                            obj->level[pos_x + pos_y*w] = obj->level[pos_x + pos_y*w] - 1;
-                        }
-                        break;
-                }
-                if (obj->level[x + y*w] < 0)
-                    obj->level[x + y*w] = 0;
-                if (obj->level[x + y*w] > obj->grow_size)
-                {
-                    obj->color[x + y*w] = obj->color[pos_x + pos_y*w];
-                    obj->level[x + y*w] = 0;
-                }
-            }
-        }
-    }
-    for (int x = 0; x < w; x++)
-    {
-        for (int y = 0; y < h; y++)
-        {
-            if (obj->distortion)
-            {
-                int r = random(10000);
-                if (r < obj->dist_strength)
-                    obj->color[x + y*w] = random(3) + 1;
-            }
-            CRGB temp_color;
-            temp_color.r = 0;
-            temp_color.g = 0;
-            temp_color.b = 0;
-            switch (obj->color[x + y*w])
-            {
-                case 1:
-                    temp_color.r = 255;
-                    break;
-                case 2:
-                    temp_color.g = 255;
-                    break;
-                case 3:
-                    temp_color.b = 255;
-                    break;
-            }
-            r.setPixelRGB(x, y, temp_color.r, temp_color.g, temp_color.b);
-        }
-    }
-    return true;
-}
-
-static inline int iabs(int a)
-{
-    return (a < 0) ? -a : a;
-}
-
-static bool LogicEffectFadeAndScroll(LogicEngineRenderer& r)
-{
-    enum Palette
-    {
-        kPaletteRGB,
-        kPaletteRed,
-        kPaletteGreen,
-        kPaletteBlue,
-        kPaletteWhite,
-        kPaletteHalf,
-        kPaletteLast = kPaletteHalf,
-        kPaletteRandom
-    };
-    enum Direction
-    {
-        kForward,
-        kBackward,
-        kLastDirection = kBackward,
-        kRandomDirection
-    };
-    enum Type
-    {
-        kFlat,
-        kVertical,
-        kHorizontal,
-        kDiagonalLeft,
-        kDiagonalRight,
-        kHorizontalSymmetric,
-        kVerticalSymmetric,
-        kHyperbola,
-        kDiamond,
-        kCircle,
-        kPlasma,
-        kTypeLast = kPlasma,
-        kRandomType
-    };
-    class FadeObject : public LogicEffectObject
-    {
-    public:
-        int fs_speed = 1+random(10);
-        int fs_zoom = 5+random(40);
-        int fs_index = 0;
-        Type fs_scroll_type = kRandomType;
-        Direction fs_dir = kRandomDirection;
-        Palette fs_palette = random(1) ? kPaletteRGB : random(1) ? kPaletteHalf : Palette(random(kPaletteLast));
-        int* fs_height = NULL;
-        CRGB* fs_lut = NULL;
-        int fs_lut_len = 0;
-
-        FadeObject(LogicEngineRenderer& r)
-        {
-            unsigned h = r.height();
-            unsigned w = r.width();
-
-            if (fs_palette == kPaletteRandom)
-                fs_palette = Palette(random(int(kPaletteLast)));
-            if (fs_dir == kRandomDirection)
-                fs_dir = Direction(random(int(kLastDirection)));
-            if (fs_scroll_type == kRandomType)
-                fs_scroll_type = Type(random(int(kTypeLast)));
-            switch (fs_palette)
-            {
-                case kPaletteRGB:
-                    fs_lut = new CRGB[fs_lut_len = 1536];
-                    for (int i = 0; i < 256; i++)
-                    {
-                        fs_lut[i].setRGB(255, i, 0);
-                        fs_lut[i + 256].setRGB(255 - i, 255, 0);
-                        fs_lut[i + 512].setRGB(0, 255, i);
-                        fs_lut[i + 768].setRGB(0, 255 - i, 255);
-                        fs_lut[i + 1024].setRGB(i, 0, 255);
-                        fs_lut[i + 1280].setRGB(255, 0, 255 - i);
-                    }
-                    break;
-                case kPaletteRed:
-                    fs_lut = new CRGB[fs_lut_len = 512];
-                    for (int i = 0; i < 256; i++)
-                    {
-                        fs_lut[i].setRGB(i, 0, 0);
-                        fs_lut[i + 256].setRGB(255 - i, 0, 0);
-                    }
-                    break;
-                case kPaletteGreen:
-                    fs_lut = new CRGB[fs_lut_len = 512];
-                    for (int i = 0; i < 256; i++)
-                    {
-                        fs_lut[i + 0].setRGB(0, i, 0);
-                        fs_lut[i + 256].setRGB(0, 255 - i, 0);
-                    }
-                    break;
-                case kPaletteBlue:
-                    fs_lut = new CRGB[fs_lut_len = 512];
-                    for (int i = 0; i < 256; i++)
-                    {
-                        fs_lut[i + 0].setRGB(0, 0, i);
-                        fs_lut[i + 256].setRGB(0, 0, 255 - i);
-                    }
-                    break;
-                case kPaletteWhite:
-                    fs_lut = new CRGB[fs_lut_len = 512];
-                    for (int i = 0; i < 256; i++)
-                    {
-                        fs_lut[i + 0].setRGB(i, i, i);
-                        fs_lut[i + 256].setRGB(255 - i, 255 - i, 255 - i);
-                    }
-                    break;
-                case kPaletteHalf:
-                    fs_lut = new CRGB[fs_lut_len = 768];
-                    for (int i = 0; i < 128; i++)
-                    {
-                        fs_lut[i + 0].setRGB(254 - 2 * i, 0, 127 - i);
-                        fs_lut[i + 128].setRGB(i, 2 * i, 0);
-                        fs_lut[i + 256].setRGB(127 - i, 254 - 2 * i, 0);
-                        fs_lut[i + 384].setRGB(0, i, 2 * i);
-                        fs_lut[i + 512].setRGB(0, 127 - i, 254 - 2 * i);
-                        fs_lut[i + 640].setRGB(2 * i, 0, i);
-                    }
-                    break;
-                case kPaletteRandom:
-                    /* ignore */
-                    break;
-            }
-            fs_height = new int[w * h];
-            switch (fs_scroll_type)
-            {
-                case kFlat:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = 0;
-                        }
-                    }
-                    break;
-                case kVertical:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = y * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kHorizontal:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = x * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kDiagonalLeft:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = (x + y) * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kDiagonalRight:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = (x + h - y) * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kHorizontalSymmetric:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = iabs(x - w / 2) * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kVerticalSymmetric:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = iabs(y - h / 2) * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kHyperbola:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = iabs(y - h / 2) * iabs(x - w / 2) * fs_zoom / 10 % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kDiamond:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = (iabs(y - h / 2) + iabs(x - w / 2)) * fs_zoom % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kCircle:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = ((y - h / 2) * (y - h / 2) + (x - w / 2) * (x - w / 2)) * fs_zoom / 10 % fs_lut_len;
-                        }
-                    }
-                    break;
-                case kPlasma:
-                    for (int x = 0; x < w; x++)
-                    {
-                        for (int y = 0; y < h; y++)
-                        {
-                            fs_index = y * w + x;
-                            fs_height[fs_index] = (int)(((fs_lut_len / 2.0F) + fs_lut_len / 2.0 * sin((x / fs_zoom)) + (fs_lut_len / 2.0F) + fs_lut_len / 2.0 * sin((y / fs_zoom))) / 2.0);
-                        }
-                    }
-                    break;
-                case kRandomType:
-                    /* ignore */
-                    break;
-            }
-        }
-
-        virtual ~FadeObject() override
-        {
-            if (fs_lut != NULL)
-                delete[] fs_lut;
-            if (fs_height != NULL)
-                delete[] fs_height;
-        }
-    };
-
-    if (r.hasEffectChanged())
-    {
-        r.setEffectObject(new FadeObject(r));
-    }
-    FadeObject* obj = (FadeObject*)r.getEffectObject();
-    unsigned h = r.height();
-    unsigned w = r.width();
-    if (obj->fs_height == NULL || obj->fs_lut == NULL)
-        return false;
-
-    switch (obj->fs_dir)
-    {
-        case kForward:
-            for (int x = 0; x < w; x++)
-            {
-                for (int y = 0; y < h; y++)
-                {
-                    obj->fs_index = y * w + x;
-                    obj->fs_height[obj->fs_index] = obj->fs_height[obj->fs_index] + obj->fs_speed;
-                    if (obj->fs_height[obj->fs_index] > obj->fs_lut_len - 1)
-                        obj->fs_height[obj->fs_index] = 0; 
-                    CRGB color = obj->fs_lut[obj->fs_height[obj->fs_index]];
-                    r.setPixelRGB(x, y, color.r, color.g, color.b);
-                }
-            }
-            break;
-        case kBackward:
-            for (int x = 0; x < w; x++)
-            {
-                for (int y = 0; y < h; y++)
-                {
-                    obj->fs_index = y * w + x;
-                    obj->fs_height[obj->fs_index] = obj->fs_height[obj->fs_index] - obj->fs_speed;
-                    if (obj->fs_height[obj->fs_index] < 0)
-                        obj->fs_height[obj->fs_index] = obj->fs_lut_len - 1; 
-                    CRGB color = obj->fs_lut[obj->fs_height[obj->fs_index]];
-                    r.setPixelRGB(x, y, color.r, color.g, color.b);
-                }
-            }
-            break;
-        case kRandomDirection:
-            /* ignore */
-            break;
-    }
-    return true;
-}
+#include "effects/BitmapEffect.h"
+#include "effects/FadeAndScrollEffect.h"
+#include "effects/FractalEffect.h"
+#include "effects/MeatBallsEffect.h"
+#include "effects/PlasmaEffect.h"
 
 LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
 {
     static const LogicEffect sCustomLogicEffects[] = {
         LogicEffectBitmap,
-        LogicEffectSpectrum,
-        LogicEffectReactive,
         LogicEffectPlasma,
         LogicEffectMetaBalls,
         LogicEffectFractal,
@@ -1420,6 +509,17 @@ void unmountFileSystems()
 #endif
 }
 
+////////////////////////////////
+
+void reboot()
+{
+    DEBUG_PRINTLN("Restarting...");
+    unmountFileSystems();
+    preferences.end();
+    delay(1000);
+    ESP.restart();
+}
+
 /////////////////////////////////////////////////////////////////////////
 
 void scan_i2c()
@@ -1480,37 +580,6 @@ void scan_i2c()
         Serial.println("done\n");
 }
 
-void audioLoopTask(void* arg)
-{
-    for (;;)
-    {
-    #ifdef USE_AUDIO
-        audio.loop();
-    #endif
-        if (otaInProgress)
-            AnimatedEvent::process();
-        vTaskDelay(1);
-    }
-    // Serial.println("Audio running on core: "+String(xPortGetCoreID()));
-    // for (;;)
-    //     audio.loop();
-}
-
-void playRandom()
-{
-#if defined(USE_AUDIO) && defined(USE_SD)
-    static const char* sounds[] = {
-        "/sounds/WOWIE.mp3",
-        "/sounds/SWDiscoShort.mp3",
-        "/sounds/UptownFunk.mp3",
-        "/sounds/LEIA.mp3",
-        "/sounds/Gangnam.mp3",
-        "/sounds/firefly.mp3"
-    };
-    audio.connecttoFS(SD, sounds[random(SizeOfArray(sounds))]);
-#endif
-}
-
 bool mountFileSystem()
 {
 #ifdef USE_FATFS
@@ -1527,22 +596,57 @@ void unmountFileSystem()
     USE_FS.end();
 }
 
-char bintohex(unsigned val)
-{
-    return (val <= 9) ? '0'+val : (val <= 0xF) ? 'a'+(val-10) : 0;
-}
-
 #ifdef USE_WIFI
 WifiAccess wifiAccess;
-#endif
-
-#ifdef USE_WIFI_WEB
-#include "WebPages.h"
 #endif
 
 #ifdef USE_WIFI_MARCDUINO
 WifiMarcduinoReceiver wifiMarcduinoReceiver(wifiAccess);
 #endif
+
+////////////////////////////////
+
+#ifdef USE_MENUS
+
+#include "Screens.h"
+#include "menus/CommandScreen.h"
+
+#ifdef USE_LCD_SCREEN
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+#define SCREEN_ADDRESS 0x3C
+
+#include "menus/CommandScreenHandlerSSD1306.h"
+CommandScreenHandlerSSD1306 sDisplay(sPinManager);
+
+#else
+
+#include "menus/CommandScreenHandlerSMQ.h"
+CommandScreenHandlerSMQ sDisplay;
+
+#endif
+
+#include "menus/utility/ChoiceIntArrayScreen.h"
+#include "menus/utility/ChoiceStrArrayScreen.h"
+#include "menus/utility/UnsignedValueScreen.h"
+#include "menus/utility/MenuScreen.h"
+
+#include "menus/SplashScreen.h"
+#include "menus/MainScreen.h"
+#include "menus/LogicsScreen.h"
+#include "menus/SequenceScreen.h"
+
+#endif
+
+////////////////////////////////
+
+#ifdef USE_WIFI_WEB
+#include "WebPages.h"
+#endif
+
+////////////////////////////////
 
 void setup()
 {
@@ -1581,39 +685,14 @@ void setup()
             if (Update.end(true))
             {
                 Serial.println("Update Success: "); Serial.println(readSize);
-                Serial.println("Rebooting...");
-                preferences.end();
-                ESP.restart();
+                reboot();
             }
         }
     }
-
-#ifdef USE_WIFI_WEB
-    wifiAccess.setNetworkCredentials(
-        preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME),
-        preferences.getString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE),
-        preferences.getBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT),
-        preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED));
-#endif
-
-#ifdef USE_WIFI_MARCDUINO
-    wifiMarcduinoReceiver.setEnabled(preferences.getBool(PREFERENCE_MARCWIFI_ENABLED, MARC_WIFI_ENABLED));
-    if (wifiMarcduinoReceiver.enabled())
-    {
-        wifiMarcduinoReceiver.setCommandHandler([](const char* cmd) {
-            DEBUG_PRINTLN(cmd);
-            Marcduino::processCommand(player, cmd);
-            if (preferences.getBool(PREFERENCE_MARCWIFI_SERIAL_PASS, MARC_WIFI_SERIAL_PASS) &&
-                preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED) &&
-                preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS))
-            {
-                Serial2.print(cmd); Serial2.print('\r');
-            }
-        });
-    }
-#endif
-
-    delay(200);
+    wifiEnabled = wifiActive = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
+    remoteEnabled = remoteActive = preferences.getBool(PREFERENCE_REMOTE_ENABLED, REMOTE_ENABLED);
+    printf("wifiEnabled:   %d\n", wifiEnabled);
+    printf("remoteEnabled: %d\n", remoteEnabled);
 
     if (preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED))
     {
@@ -1635,6 +714,117 @@ void setup()
     Wire.begin();
     SetupEvent::ready();
 
+    if (remoteEnabled)
+    {
+    #ifdef USE_SMQ
+        WiFi.mode(WIFI_MODE_STA);
+        if (SMQ::init(preferences.getString(PREFERENCE_REMOTE_HOSTNAME, SMQ_HOSTNAME),
+                        preferences.getString(PREFERENCE_REMOTE_SECRET, SMQ_SECRET)))
+        {
+            printf("Droid Remote Enabled\n");
+            SMQ::setHostDiscoveryCallback([](SMQHost* host) {
+                if (host->hasTopic("LCD"))
+                {
+                    printf("Remote Discovered: %s\n", host->getHostName().c_str());
+                }
+            });
+
+            SMQ::setHostLostCallback([](SMQHost* host) {
+                printf("Lost: %s\n", host->getHostName().c_str());
+            });
+        }
+        else
+        {
+            printf("Failed to activate Droid Remote\n");
+        }
+    #endif
+    }
+    else if (wifiEnabled)
+    {
+    #ifdef USE_WIFI_WEB
+        // In preparation for adding WiFi settings web page
+        wifiAccess.setNetworkCredentials(
+            preferences.getString(PREFERENCE_WIFI_SSID, WIFI_AP_NAME),
+            preferences.getString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE),
+            preferences.getBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT),
+            preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED));
+    #ifdef USE_WIFI_MARCDUINO
+        wifiMarcduinoReceiver.setEnabled(preferences.getBool(PREFERENCE_MARCWIFI_ENABLED, MARC_WIFI_ENABLED));
+        if (wifiMarcduinoReceiver.enabled())
+        {
+            wifiMarcduinoReceiver.setCommandHandler([](const char* cmd) {
+                DEBUG_PRINTLN(cmd);
+                Marcduino::processCommand(player, cmd);
+                if (preferences.getBool(PREFERENCE_MARCWIFI_SERIAL_PASS, MARC_WIFI_SERIAL_PASS) &&
+                    preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED) &&
+                    preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS))
+                {
+                    Serial2.print(cmd); Serial2.print('\r');
+                }
+            });
+        }
+    #endif
+        wifiAccess.notifyWifiConnected([](WifiAccess &wifi) {
+        #ifdef STATUSLED_PIN
+            statusLED.setMode(sCurrentMode = kWifiMode);
+        #endif
+            Serial.print("Connect to http://"); Serial.println(wifi.getIPAddress());
+        #ifdef USE_MDNS
+            // No point in setting up mDNS if R2 is the access point
+            if (!wifi.isSoftAP())
+            {
+                String mac = wifi.getMacAddress();
+                String hostName = mac.substring(mac.length()-5, mac.length());
+                hostName.remove(2, 1);
+                hostName = String(WIFI_AP_NAME)+String("-")+hostName;
+                if (webServer.enabled())
+                {
+                    Serial.print("Host name: "); Serial.println(hostName);
+                    if (!MDNS.begin(hostName.c_str()))
+                    {
+                        DEBUG_PRINTLN("Error setting up MDNS responder!");
+                    }
+                }
+            }
+        #endif
+        });
+    #endif
+    #ifdef USE_OTA
+        ArduinoOTA.onStart([]()
+        {
+            String type;
+            if (ArduinoOTA.getCommand() == U_FLASH)
+            {
+                type = "sketch";
+            }
+            else // U_SPIFFS
+            {
+                type = "filesystem";
+            }
+            DEBUG_PRINTLN("OTA START");
+        })
+        .onEnd([]()
+        {
+            DEBUG_PRINTLN("OTA END");
+        })
+        .onProgress([](unsigned int progress, unsigned int total)
+        {
+            // float range = (float)progress / (float)total;
+        })
+        .onError([](ota_error_t error)
+        {
+            String desc;
+            if (error == OTA_AUTH_ERROR) desc = "Auth Failed";
+            else if (error == OTA_BEGIN_ERROR) desc = "Begin Failed";
+            else if (error == OTA_CONNECT_ERROR) desc = "Connect Failed";
+            else if (error == OTA_RECEIVE_ERROR) desc = "Receive Failed";
+            else if (error == OTA_END_ERROR) desc = "End Failed";
+            else desc = "Error: "+String(error);
+            DEBUG_PRINTLN(desc);
+        });
+    #endif
+    }
+
     // Setup button and trimpot controller
     sController.configure(FLD, RLD);
     sController.setWifiReset([]() {
@@ -1643,9 +833,7 @@ void setup()
         preferences.putString(PREFERENCE_WIFI_PASS, WIFI_AP_PASSPHRASE);
         preferences.putBool(PREFERENCE_WIFI_AP, WIFI_ACCESS_POINT);
         preferences.putBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
-        preferences.end();
-        DEBUG_PRINTLN("Restarting");
-        ESP.restart();
+        reboot();
     });
 
     sController.setWifiToggle([]() {
@@ -1659,20 +847,13 @@ void setup()
             DEBUG_PRINTLN("WiFi Disabled");
         }
         preferences.putBool(PREFERENCE_WIFI_ENABLED, wifiEnabled);
-        preferences.end();
-        DEBUG_PRINTLN("Restarting");
-        ESP.restart();
+        reboot();
     });
 
     Serial.print("Total heap:  "); Serial.println(ESP.getHeapSize());
     Serial.print("Free heap:   "); Serial.println(ESP.getFreeHeap());
     Serial.print("Total PSRAM: "); Serial.println(ESP.getPsramSize());
     Serial.print("Free PSRAM:  "); Serial.println(ESP.getFreePsram());
-
-#ifdef USE_AUDIO
-    audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    audio.setVolume(12); // 0...21
-#endif
 
 #ifdef USE_WIFI_WEB
     wifiAccess.notifyWifiConnected([](WifiAccess &wifi) {
@@ -1717,10 +898,6 @@ void setup()
     });
 #endif
 
-#ifdef USE_AUDIO
-    RLD_setPeakValueProvider(audioPeakValue);
-    FLD_setPeakValueProvider(audioPeakValue);
-#endif
     RLD_setLogicEffectSelector(CustomLogicEffectSelector);
     FLD_setLogicEffectSelector(CustomLogicEffectSelector);
 
@@ -1729,23 +906,15 @@ void setup()
     }
 #endif
 
-#ifdef USE_AUDIO
-    playRandom();
-    //audio.connecttohost("http://macslons-irish-pub-radio.com/media.asx");
-#endif
+#ifdef USE_WIFI
     xTaskCreatePinnedToCore(
-          audioLoopTask,
-          "Audio",
-          10000,    // shrink stack size?
+          eventLoopTask,
+          "Events",
+          5000,    // shrink stack size?
           NULL,
           1,
-          &audioTask,
+          &eventTask,
           0);
-#ifdef USE_AUDIO
-    // Setup audio processing filter for LEDs
-    audio.setSampleFilter([](unsigned numBits, unsigned numChannels, const int16_t* samples, unsigned sampleCount) {
-        audioBitmap.processSamples(numBits, numChannels, samples, sampleCount);
-    });
 #endif
 }
 
@@ -1759,85 +928,123 @@ MARCDUINO_ACTION(DirectCommand, ~RT, ({
 ////////////////
 
 MARCDUINO_ACTION(WifiByeBye, #WIBYE, ({
-    bool wifiEnabled = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
     if (wifiEnabled)
     {
         preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
-        preferences.end();
-        DEBUG_PRINTLN("Enabling WiFi. Restarting");
-        ESP.restart();
+        reboot();
     }
 }))
 
 ////////////////
 
 MARCDUINO_ACTION(WifiHiHi, #WIHI, ({
-    bool wifiEnabled = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
     if (!wifiEnabled)
     {
         preferences.putBool(PREFERENCE_WIFI_ENABLED, true);
-        preferences.end();
-        DEBUG_PRINTLN("Disabling WiFi. Restarting");
-        ESP.restart();
+        reboot();
     }
 }))
 
 ////////////////
 
-void loop()
+MARCDUINO_ACTION(RemoteByeBye, #WIREMOTEBYE, ({
+    if (remoteEnabled)
+    {
+        preferences.putBool(PREFERENCE_REMOTE_ENABLED, false);
+        DEBUG_PRINT("Disabling droid remote. ");
+        reboot();
+    }
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteHiHI, #WIREMOTEHI, ({
+    if (!remoteEnabled)
+    {
+        preferences.putBool(PREFERENCE_REMOTE_ENABLED, true);
+        preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
+        DEBUG_PRINT("Enabling droid remote. ");
+        reboot();
+    }
+}))
+
+////////////////
+
+////////////////
+
+void mainLoop()
 {
-#ifdef USE_OTA
-    if (otaInProgress)
-        ArduinoOTA.handle();
-#endif
-    if (!otaInProgress)
-    {
-        AnimatedEvent::process();
-    }
-#ifdef USE_WIFI_WEB
-    if (preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED))
-    {
-        webServer.handle();
-    }
+    AnimatedEvent::process();
+#ifdef USE_MENUS
+    sDisplay.process();
 #endif
 }
 
-#ifdef USE_AUDIO
-// optional
-void audio_info(const char *info){
-    Serial.print("info        "); Serial.println(info);
+////////////////
+
+#ifdef USE_WIFI
+void eventLoopTask(void* )
+{
+    for (;;)
+    {
+        mainLoop();
+        vTaskDelay(1);
+    }
 }
-void audio_id3data(const char *info){  //id3 metadata
-    Serial.print("id3data     "); Serial.println(info);
+#endif
+
+////////////////
+
+void loop()
+{
+#ifdef USE_WIFI
+    if (wifiActive)
+    {
+    #ifdef USE_OTA
+        ArduinoOTA.handle();
+    #endif
+    #ifdef USE_WIFI_WEB
+        webServer.handle();
+    #endif
+    }
+    else if (remoteActive)
+    {
+    #ifdef USE_SMQ
+        SMQ::process();
+    #endif
+    }
+#else
+    mainLoop();
+ #ifdef ESP32
+    vTaskDelay(1);
+ #endif
+#endif
 }
-void audio_id3image(File& file, const size_t pos, const size_t size){
-    Serial.print("id3image     "); Serial.printf("at pos: %u, length: %u\n", pos, size);
-}
-void audio_eof_mp3(const char *info){  //end of file
-    Serial.print("eof_mp3     ");Serial.println(info);
-    playRandom();
-}
-void audio_showstation(const char *info){
-    Serial.print("station     ");Serial.println(info);
-}
-void audio_showstreamtitle(const char *info){
-    RLDText = info;
-    RLD_selectScrollTextLeft(RLDText.c_str());
-    Serial.print("streamtitle ");Serial.println(info);
-}
-void audio_bitrate(const char *info){
-    Serial.print("bitrate     ");Serial.println(info);
-}
-void audio_commercial(const char *info){  //duration in sec
-    Serial.print("commercial  ");Serial.println(info);
-}
-void audio_icyurl(const char *info){  //homepage
-    Serial.print("icyurl      ");Serial.println(info);
-}
-void audio_lasthost(const char *info){  //stream URL played
-    Serial.print("lasthost    ");Serial.println(info);
-}
-void audio_eof_speech(const char *info){
-    Serial.print("eof_speech  ");Serial.println(info);
-}
+
+////////////////
+
+#ifdef USE_SMQ
+SMQMESSAGE(DIAL, {
+    long newValue = msg.get_int32("new");
+    long oldValue = msg.get_int32("old");
+    sDisplay.remoteDialEvent(newValue, oldValue);
+})
+
+///////////////////////////////////////////////////////////////////////////////
+
+SMQMESSAGE(BUTTON, {
+    uint8_t id = msg.get_uint8("id");
+    bool pressed = msg.get_uint8("pressed");
+    bool repeat = msg.get_uint8("repeat");
+    sDisplay.remoteButtonEvent(id, pressed, repeat);
+})
+
+///////////////////////////////////////////////////////////////////////////////
+
+SMQMESSAGE(SELECT, {
+    DEBUG_PRINTLN("REMOTE ACTIVE");
+    sDisplay.setEnabled(true);
+    sDisplay.switchToScreen(kMainScreen);
+    sMainScreen.init();
+})
 #endif

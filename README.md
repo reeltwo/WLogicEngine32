@@ -23,9 +23,9 @@ https://github.com/joymonkey/logicengine/wiki/WReactor32
 
 # REQUIREMENTS
 
-Arduino IDE: https://www.arduino.cc/en/Main/Software  
-FastLED: https://github.com/FastLED/FastLED/releases  
-Reeltwo: https://github.com/reeltwo/Reeltwo/releases
+Arduino IDE: https://www.arduino.cc/en/Main/Software  (1.8.13 or higher)
+FastLED: https://github.com/FastLED/FastLED/releases  (3.5.0 or higher)
+Reeltwo: https://github.com/reeltwo/Reeltwo/releases  (1.1 or higher)
 
 **********
 

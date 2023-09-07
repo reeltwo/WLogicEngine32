@@ -57,7 +57,8 @@ String rldBoards[] = {
     "DeathStar 96 LED Inverted",
     "DeathStar 96 LED Inverted StaggerOdd",
     "Kenny 96 LED",
-    "Naboo 96 LED"
+    "Naboo 96 LED",
+    "Super 256 LED",
 };
 
 String logicsSeq[] = {
@@ -159,6 +160,8 @@ WElement logicsContents[] = {
         {
             sFLDDisplayText = sFLDText;
             sFLDDisplayText.replace("\\n", "\n");
+            if (FLD != nullptr)
+                FLD->resetEffect();
             FLD_selectSequence(logicsSeqNumber[sFLDSequence], (LogicEngineRenderer::ColorVal)sFLDColor, sFLDSpeedScale, sFLDNumSeconds);
             FLD_setTextMessage(sFLDDisplayText.c_str());
             sFLDChanged = false;
@@ -167,6 +170,8 @@ WElement logicsContents[] = {
         {
             sRLDDisplayText = sRLDText;
             sRLDDisplayText.replace("\\n", "\n");
+            if (RLD != nullptr)
+                RLD->resetEffect();
             RLD_selectSequence(logicsSeqNumber[sRLDSequence], (LogicEngineRenderer::ColorVal)sRLDColor, sRLDSpeedScale, sRLDNumSeconds);
             RLD_setTextMessage(sRLDDisplayText.c_str());
             sRLDChanged = false;

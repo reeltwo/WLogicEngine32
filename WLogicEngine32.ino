@@ -9,6 +9,7 @@
 #define USE_SPIFFS                    // Enable read only filesystem
 #define USE_LEDLIB 0                  // Require FastLED instead of Adafruit NeoPixel library
 #define USE_SDCARD                    // Enable SD card support
+#define SHOW_UPTIME
 
 #define USE_LOGICS
 #ifdef USE_WIFI
@@ -81,6 +82,7 @@
 #ifdef USE_OTA
 #include <ArduinoOTA.h>
 #endif
+#include "core/MedianSampleBuffer.h"
 
 ////////////////////////////////
 
@@ -159,7 +161,8 @@ enum LogicEngineRLDType
     kLogicEngineDeathStarRLDInverted,
     kLogicEngineDeathStarRLDInvertedStaggerOdd,
     kLogicEngineKennyRLD,
-    kLogicEngineNabooRLD
+    kLogicEngineNabooRLD,
+    kLogicEngineSuperRLD
 };
 
 #ifdef USE_LOGICS
@@ -232,6 +235,9 @@ void RLD_init()
         case kLogicEngineNabooRLD:
             RLD = new LogicEngineNabooRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
             break;
+        case kLogicEngineSuperRLD:
+            RLD = new LogicEngineSuperRLD<REAR_LOGIC_CLOCK_PIN>(LogicEngineRLDDefault, 2);
+            break;
     }
 }
 
@@ -270,6 +276,7 @@ void RLD_selectType(unsigned type)
         case kLogicEngineDeathStarRLDInvertedStaggerOdd:
         case kLogicEngineKennyRLD:
         case kLogicEngineNabooRLD:
+        case kLogicEngineSuperRLD:
             sRLDType = (LogicEngineRLDType)type;
             break;
     }
@@ -444,6 +451,8 @@ bool ensureVSPIStarted()
 
 #ifdef USE_SDCARD
 static bool sSDCardMounted;
+#else
+static constexpr bool sSDCardMounted = false;
 #endif
 
 bool mountReadOnlyFileSystem()
@@ -661,6 +670,7 @@ void setup()
 
     delay(200);
 
+#ifdef USE_SDCARD
     if (getSDCardMounted())
     {
         File binImage = SD.open("/LENGINE.BIN");
@@ -689,6 +699,7 @@ void setup()
             }
         }
     }
+#endif
     wifiEnabled = wifiActive = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
     remoteEnabled = remoteActive = preferences.getBool(PREFERENCE_REMOTE_ENABLED, REMOTE_ENABLED);
     printf("wifiEnabled:   %d\n", wifiEnabled);
@@ -977,6 +988,25 @@ void mainLoop()
     AnimatedEvent::process();
 #ifdef USE_MENUS
     sDisplay.process();
+#endif
+#ifdef SHOW_UPTIME
+    uint32_t now = millis();
+    static uint32_t sLastMillis;
+    if (sLastMillis + 1000L < now)
+    {
+        sLastMillis = now;
+        unsigned seconds = (unsigned)(now / 1000) % 60;
+        unsigned minutes = (unsigned)((now / (1000*60)) % 60);
+        unsigned hours   = (unsigned)((now / (1000*60*60)) % 24);
+        if (hours != 0) {
+            printf("Uptime: %u:%02u:%02u   \r", hours, minutes, seconds);
+        } else if (minutes != 0) {
+            printf("Uptime: %02u:%02u      \r", minutes, seconds);
+        } else {
+            printf("Uptime: %02u seconds\r", seconds);
+        }
+        fflush(stdout);
+    }
 #endif
 }
 

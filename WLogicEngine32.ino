@@ -8,7 +8,11 @@
 #define USE_DROID_REMOTE              // Define for droid remote support
 #define USE_SPIFFS                    // Enable read only filesystem
 #define USE_LEDLIB 0                  // Require FastLED instead of Adafruit NeoPixel library
+#ifndef WREACTOR32_2023
 #define USE_SDCARD                    // Enable SD card support
+#else
+#define USE_CONTROLLER
+#endif
 #define SHOW_UPTIME
 
 #define USE_LOGICS
@@ -25,6 +29,8 @@
 #define PREFERENCE_REMOTE_ENABLED       "remote"
 #define PREFERENCE_REMOTE_HOSTNAME      "rhost"
 #define PREFERENCE_REMOTE_SECRET        "rsecret"
+#define PREFERENCE_REMOTE_PAIRED        "rpaired"
+#define PREFERENCE_REMOTE_LMK           "rlmk"
 
 #define PREFERENCE_FLD                  "fld"
 #define PREFERENCE_RLD                  "rld"
@@ -45,8 +51,10 @@
 
 #if __has_include("build_version.h")
 #include "build_version.h"
-#else
-#define BUILD_VERSION "custom"
+#endif
+
+#if __has_include("reeltwo_build_version.h")
+#include "reeltwo_build_version.h"
 #endif
 
 ////////////////////////////////
@@ -148,7 +156,8 @@ enum LogicEngineFLDType
     kLogicEngineDeathStarFLD,
     kLogicEngineDeathStarFLDInverted,
     kLogicEngineKennyFLD,
-    kLogicEngineNabooFLD
+    kLogicEngineNabooFLD,
+    kLogicEngineRGBWFLD
 };
 
 enum LogicEngineRLDType
@@ -170,7 +179,9 @@ LogicEngineRenderer* FLD;
 LogicEngineRenderer* RLD;
 LogicEngineFLDType sFLDType;
 LogicEngineRLDType sRLDType;
+#ifdef USE_CONTROLLER
 LogicEngineControllerDefault sController(preferences);
+#endif
 
 void FLD_init()
 {
@@ -187,6 +198,9 @@ void FLD_init()
             break;
         case kLogicEngineNabooFLD:
             FLD = new LogicEngineNabooFLD<>(LogicEngineFLDDefault, 1);
+            break;
+        case kLogicEngineRGBWFLD:
+            FLD = new LogicEngineRGBWFLD<>(LogicEngineFLDDefault, 1);
             break;
         case kLogicEngineNoFLD:
         default:
@@ -253,6 +267,7 @@ void FLD_selectType(unsigned type)
         case kLogicEngineDeathStarFLDInverted:
         case kLogicEngineKennyFLD:
         case kLogicEngineNabooFLD:
+        case kLogicEngineRGBWFLD:
             sFLDType = (LogicEngineFLDType)type;
             break;
     }
@@ -700,18 +715,27 @@ void setup()
         }
     }
 #endif
+#ifdef USE_WIFI
     wifiEnabled = wifiActive = preferences.getBool(PREFERENCE_WIFI_ENABLED, WIFI_ENABLED);
     remoteEnabled = remoteActive = preferences.getBool(PREFERENCE_REMOTE_ENABLED, REMOTE_ENABLED);
-    printf("wifiEnabled:   %d\n", wifiEnabled);
-    printf("remoteEnabled: %d\n", remoteEnabled);
+#endif
+    PrintReelTwoInfo(Serial, "LogicEngine");
 
     if (preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED))
     {
-        Serial1.begin(preferences.getInt(PREFERENCE_MARCSERIAL1, MARC_SERIAL1_BAUD_RATE), SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
-        if (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS))
-            Serial2.begin(preferences.getInt(PREFERENCE_MARCSERIAL2, MARC_SERIAL2_BAUD_RATE), SERIAL_8N1, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
-
-        marcduinoSerial.setStream(&Serial1, (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS)) ? &Serial2 : nullptr);
+        int baudrate1 = preferences.getInt(PREFERENCE_MARCSERIAL1, MARC_SERIAL1_BAUD_RATE);
+        if (!isValidBaudRate(baudrate1)) {
+            printf("Serial1 baud rate of %d is invalid. Defaulting to %d.\n", baudrate1, MARC_SERIAL1_BAUD_RATE);
+            baudrate1 = MARC_SERIAL1_BAUD_RATE;
+        }
+        int baudrate2 = preferences.getInt(PREFERENCE_MARCSERIAL2, MARC_SERIAL2_BAUD_RATE);
+        if (!isValidBaudRate(baudrate2)) {
+            printf("Serial2 baud rate of %d is invalid. Defaulting to %d.\n", baudrate2, MARC_SERIAL2_BAUD_RATE);
+            baudrate2 = MARC_SERIAL2_BAUD_RATE;
+        }
+        Serial1.begin(baudrate1, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
+        Serial2.begin(baudrate2, SERIAL_8N1, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
+        marcduinoSerial.setStream(&Serial1, (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS)) ? &Serial2 : &Serial);
     }
 
     // Initialize FLD
@@ -836,6 +860,7 @@ void setup()
     #endif
     }
 
+#ifdef USE_CONTROLLER
     // Setup button and trimpot controller
     sController.configure(FLD, RLD);
     sController.setWifiReset([]() {
@@ -860,6 +885,7 @@ void setup()
         preferences.putBool(PREFERENCE_WIFI_ENABLED, wifiEnabled);
         reboot();
     });
+#endif
 
     Serial.print("Total heap:  "); Serial.println(ESP.getHeapSize());
     Serial.print("Free heap:   "); Serial.println(ESP.getFreeHeap());
@@ -938,48 +964,144 @@ MARCDUINO_ACTION(DirectCommand, ~RT, ({
 
 ////////////////
 
-MARCDUINO_ACTION(WifiByeBye, #WIBYE, ({
-    if (wifiEnabled)
+MARCDUINO_ACTION(LEDirectCommand, @LE, ({
+    // Direct ReelTwo command
+    CommandEvent::process(Marcduino::getCommand());
+}))
+
+MARCDUINO_ACTION(APDirectCommand, @AP, ({
+    // Direct ReelTwo command
+    CommandEvent::process(Marcduino::getCommand());
+}))
+
+////////////////
+
+MARCDUINO_ACTION(WifiToggle, #LEWIFI, ({
+#ifdef USE_WIFI
+    bool wifiSetting = wifiEnabled;
+    switch (*Marcduino::getCommand())
     {
-        preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
+        case '0':
+            wifiSetting = false;
+            break;
+        case '1':
+            wifiSetting = true;
+            break;
+        case '\0':
+            // Toggle WiFi
+            wifiSetting = !wifiSetting;
+            break;
+    }
+    if (wifiEnabled != wifiSetting)
+    {
+        if (wifiSetting)
+        {
+            preferences.putBool(PREFERENCE_WIFI_ENABLED, true);
+            DEBUG_PRINTLN("WiFi Enabled");
+        }
+        else
+        {
+            preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
+            DEBUG_PRINTLN("WiFi Disabled");
+        }
+        reboot();
+    }
+#endif
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteToggle, #LEREMOTE, ({
+#ifdef USE_DROID_REMOTE
+    bool remoteSetting = remoteEnabled;
+    switch (*Marcduino::getCommand())
+    {
+        case '0':
+            remoteSetting = false;
+            break;
+        case '1':
+            remoteSetting = true;
+            break;
+        case '\0':
+            // Toggle remote
+            remoteSetting = !remoteSetting;
+            break;
+    }
+    if (remoteEnabled != remoteSetting)
+    {
+        if (remoteSetting)
+        {
+            preferences.putBool(PREFERENCE_REMOTE_ENABLED, true);
+            DEBUG_PRINTLN("Remote Enabled");
+        }
+        else
+        {
+            preferences.putBool(PREFERENCE_REMOTE_ENABLED, false);
+            DEBUG_PRINTLN("Remote Disabled");
+        }
+        reboot();
+    }
+#endif
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteName, #LERNAME, ({
+    String newSecret = String(Marcduino::getCommand());
+    if (preferences.getString(PREFERENCE_REMOTE_SECRET, SMQ_HOSTNAME) != newSecret)
+    {
+        preferences.putString(PREFERENCE_REMOTE_SECRET, newSecret);
+        printf("Changed.\n");
         reboot();
     }
 }))
 
 ////////////////
 
-MARCDUINO_ACTION(WifiHiHi, #WIHI, ({
-    if (!wifiEnabled)
+MARCDUINO_ACTION(RemoteSecret, #LERSECRET, ({
+    String newSecret = String(Marcduino::getCommand());
+    if (preferences.getString(PREFERENCE_REMOTE_SECRET, SMQ_HOSTNAME) != newSecret)
     {
-        preferences.putBool(PREFERENCE_WIFI_ENABLED, true);
+        preferences.putString(PREFERENCE_REMOTE_SECRET, newSecret);
+        printf("Changed.\n");
         reboot();
     }
 }))
 
 ////////////////
 
-MARCDUINO_ACTION(RemoteByeBye, #WIREMOTEBYE, ({
-    if (remoteEnabled)
+MARCDUINO_ACTION(RemotePair, #LEPAIR, ({
+    printf("Pairing Started ...\n");
+    SMQ::startPairing();
+}))
+
+////////////////
+
+MARCDUINO_ACTION(RemoteUnpair, #LEUNPAIR, ({
+    if (preferences.remove(PREFERENCE_REMOTE_PAIRED))
     {
-        preferences.putBool(PREFERENCE_REMOTE_ENABLED, false);
-        DEBUG_PRINT("Disabling droid remote. ");
+        printf("Unpairing Success...\n");
         reboot();
+    }
+    else
+    {
+        printf("Not Paired...\n");
     }
 }))
 
 ////////////////
 
-MARCDUINO_ACTION(RemoteHiHI, #WIREMOTEHI, ({
-    if (!remoteEnabled)
-    {
-        preferences.putBool(PREFERENCE_REMOTE_ENABLED, true);
-        preferences.putBool(PREFERENCE_WIFI_ENABLED, false);
-        DEBUG_PRINT("Enabling droid remote. ");
-        reboot();
-    }
+MARCDUINO_ACTION(ClearPrefs, #LEZERO, ({
+    preferences.clear();
+    DEBUG_PRINT("Clearing preferences. ");
+    reboot();
 }))
 
 ////////////////
+
+MARCDUINO_ACTION(Restart, #LERESTART, ({
+    reboot();
+}))
 
 ////////////////
 

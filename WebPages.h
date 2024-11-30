@@ -45,7 +45,8 @@ String fldBoards[] = {
     "RSeries 40 LED",
     "RSeries 40 LED Inverted",
     "C3PO 40 LED",
-    "Naboo 48 LED"
+    "Naboo 48 LED",
+    "RGBW 40 LED"
 };
 
 String rldBoards[] = {
@@ -189,7 +190,36 @@ WElement logicsContents[] = {
 String swBaudRates[] = {
     "2400",
     "9600",
+    "57600",
+    "115200",
 };
+
+int swBaudRatesInt[] = {
+    2400,
+    9600,
+    57600,
+    115200,
+};
+
+bool isValidBaudRate(int baudRate) {
+    for (int i = 0; i < SizeOfArray(swBaudRatesInt); i++)
+    {
+        if (baudRate == swBaudRatesInt[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int swBaudRateToIndex(int baudRate)
+{
+    for (int i = 0; i < SizeOfArray(swBaudRatesInt); i++)
+    {
+        if (baudRate == swBaudRatesInt[i])
+            return i;
+    }
+    return 0;
+}
 
 int marcSerial1Baud;
 int marcSerial2Baud;
@@ -201,24 +231,30 @@ bool marcWifiSerialPass;
 WElement marcduinoContents[] = {
     WSelect("Serial1 Baud Rate", "serial1baud",
         swBaudRates, SizeOfArray(swBaudRates),
-        []() { return (marcSerial1Baud = (preferences.getInt(PREFERENCE_MARCSERIAL1, MARC_SERIAL1_BAUD_RATE)) == 2400) ? 0 : 1; },
-        [](int val) { marcSerial1Baud = (val == 0) ? 2400 : 9600; } ),
+        []() { return (marcSerial1Baud = swBaudRateToIndex(preferences.getInt(PREFERENCE_MARCSERIAL1, MARC_SERIAL1_BAUD_RATE))); },
+        [](int val) { marcSerial1Baud = swBaudRatesInt[val]; }),
+    WVerticalAlign(),
     WSelect("Serial2 Baud Rate", "serial2baud",
         swBaudRates, SizeOfArray(swBaudRates),
-        []() { return (marcSerial2Baud = (preferences.getInt(PREFERENCE_MARCSERIAL2, MARC_SERIAL2_BAUD_RATE)) == 2400) ? 0 : 1; },
-        [](int val) { marcSerial2Baud = (val == 0) ? 2400 : 9600; } ),
+        []() { return (marcSerial2Baud = swBaudRateToIndex(preferences.getInt(PREFERENCE_MARCSERIAL2, MARC_SERIAL2_BAUD_RATE))); },
+        [](int val) { marcSerial2Baud = swBaudRatesInt[val]; }),
+    WVerticalAlign(),
     WCheckbox("Serial1 pass-through to Serial2", "serialpass",
         []() { return (marcSerialPass = (preferences.getBool(PREFERENCE_MARCSERIAL_PASS, MARC_SERIAL_PASS))); },
         [](bool val) { marcSerialPass = val; } ),
+    WVerticalAlign(),
     WCheckbox("Marcduino on Serial1", "enabled",
         []() { return (marcSerialEnabled = (preferences.getBool(PREFERENCE_MARCSERIAL_ENABLED, MARC_SERIAL_ENABLED))); },
         [](bool val) { marcSerialEnabled = val; } ),
+    WVerticalAlign(),
     WCheckbox("Marcduino on Wifi (port 2000)", "wifienabled",
         []() { return (marcWifiEnabled = (preferences.getBool(PREFERENCE_MARCWIFI_ENABLED, MARC_WIFI_ENABLED))); },
         [](bool val) { marcWifiEnabled = val; } ),
+    WVerticalAlign(),
     WCheckbox("Marcduino Wifi pass-through to Serial2", "wifipass",
         []() { return (marcWifiSerialPass = (preferences.getBool(PREFERENCE_MARCWIFI_SERIAL_PASS, MARC_WIFI_SERIAL_PASS))); },
         [](bool val) { marcWifiSerialPass = val; } ),
+    WVerticalAlign(),
     WButton("Save", "save", []() {
         preferences.putInt(PREFERENCE_MARCSERIAL1, marcSerial1Baud);
         preferences.putInt(PREFERENCE_MARCSERIAL2, marcSerial2Baud);
@@ -246,6 +282,7 @@ WElement setupLogicsContents[] = {
         rldBoards, SizeOfArray(rldBoards),
         []() { return (int)sRLDType; },
         [](int val) { RLD_selectType((LogicEngineRLDType)val); } ),
+#ifdef USE_CONTROLLER
     WSlider("Front Brightness", "fldbri", 0, 255,
         []()->int { return sController.getSettings(0).fBri; },
         [](int val) { sController.changeSetting(0, 1, val); } ),
@@ -276,15 +313,20 @@ WElement setupLogicsContents[] = {
     WSlider("Rear Palette", "rearpal", 0, LogicEngineDefaults::PAL_COUNT,
         []()->int { return sController.getSettings(1).fPalNum; },
         [](int val) { sController.changeSetting(1, 5, val); } ),
+#endif
     WButton("Save", "save", []() {
         preferences.putUChar(PREFERENCE_FLD, sFLDType);
         preferences.putUChar(PREFERENCE_RLD, sRLDType);
+    #ifdef USE_CONTROLLER
         sController.commit();
+    #endif
     }),
     WHorizontalAlign(),
     WButtonReload("Defaults", "default", []() {
+    #ifdef USE_CONTROLLER
         sController.restoreFactoryDefaults(0);
         sController.restoreFactoryDefaults(1);
+    #endif
     }),
     WHorizontalAlign(),
     WButton("Back", "back", "/setup"),

@@ -424,7 +424,8 @@ enum
     PLASMA,
     METABALLS,
     FRACTAL,
-    FADEANDSCROLL
+    FADEANDSCROLL,
+    COLORWHEEL
 };
 
 #include "effects/BitmapEffect.h"
@@ -432,6 +433,7 @@ enum
 #include "effects/FractalEffect.h"
 #include "effects/MeatBallsEffect.h"
 #include "effects/PlasmaEffect.h"
+#include "effects/ColorWheel.h"
 
 LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
 {
@@ -440,7 +442,8 @@ LogicEffect CustomLogicEffectSelector(unsigned selectSequence)
         LogicEffectPlasma,
         LogicEffectMetaBalls,
         LogicEffectFractal,
-        LogicEffectFadeAndScroll
+        LogicEffectFadeAndScroll,
+        LogicEffectColorWheel
     };
     if (selectSequence >= 100 && selectSequence-100 <= SizeOfArray(sCustomLogicEffects))
     {

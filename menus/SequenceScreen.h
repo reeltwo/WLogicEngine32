@@ -17,6 +17,7 @@ static const char* sSequenceMenu[] = {
     "Plasma",
     "Fractal",
     "Fade And\nScroll"
+    "Color Wheel"
 };
 
 class SequenceScreen : public MenuScreen
@@ -33,7 +34,8 @@ public:
         kFire,
         kPlasma,
         kFractal,
-        kFadeAndScroll
+        kFadeAndScroll,
+        kColorWheel,
     };
     SequenceScreen() :
         MenuScreen(kSequenceScreen, sSequenceMenu, SizeOfArray(sSequenceMenu))
@@ -86,6 +88,9 @@ public:
             case kFadeAndScroll:
                 FLD_selectSequence(FADEANDSCROLL);
                 RLD_selectSequence(FADEANDSCROLL);
+                break;
+            case kColorWheel:
+                FLD_selectSequence(COLORWHEEL);
                 break;
         }
     }
